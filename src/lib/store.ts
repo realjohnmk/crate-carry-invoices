@@ -174,3 +174,62 @@ export function paymentEntry(inv: Invoice, amount: number, removed = false): His
     ],
   };
 }
+
+export const isLocked = (inv: Invoice) => (inv.history?.length ?? 0) > 0;
+const now = () => new Date().toISOString();
+
+/** Confirm a draft invoice: locks the sale and writes the "Invoice created" record. */
+export function confirmInvoice(id: string) {
+  updateInvoice(id, (i) => ({ ...i, date: now(), history: diffLines({ ...i, history: [] }, i.lines) }));
+}
+
+/** Record crates returned for one line as a new event (sale stays untouched). */
+export function recordReturn(id: string, lineId: string, n: number) {
+  updateInvoice(id, (i) => {
+    const l = i.lines.find((x) => x.id === lineId);
+    if (!l || n <= 0) return i;
+    const before = invoiceTotals(i);
+    const prev = lineReturned(l);
+    const add = Math.min(n, l.qty - prev);
+    if (add <= 0) return i;
+    const lines = i.lines.map((x) => (x.id === lineId ? { ...x, returned: prev + add } : x));
+    const after = invoiceTotals({ ...i, lines });
+    const left = l.qty - prev - add;
+    return {
+      ...i,
+      lines,
+      history: [...(i.history ?? []), { id: uid(), date: now(), action: "Crate return", details: [
+        `${l.name} crates returned: ${add}`,
+        `${l.name} outstanding: ${l.qty - prev} → ${left}`,
+        `Invoice outstanding crates: ${before.outstanding} → ${after.outstanding}`,
+      ] }],
+    };
+  });
+}
+
+/** Record a missing-bottle count change for one line as a new event. */
+export function recordBottles(id: string, lineId: string, count: number) {
+  updateInvoice(id, (i) => {
+    const l = i.lines.find((x) => x.id === lineId);
+    if (!l || count < 0 || count === l.missing) return i;
+    const lines = i.lines.map((x) => (x.id === lineId ? { ...x, missing: count } : x));
+    const diff = count - l.missing;
+    return {
+      ...i,
+      lines,
+      history: [...(i.history ?? []), { id: uid(), date: now(), action: diff > 0 ? "Missing bottles" : "Bottle return", details: [
+        diff > 0 ? `${l.name} missing bottles recorded: ${diff}` : `${l.name} bottles returned: ${-diff}`,
+        `${l.name} missing bottles: ${l.missing} → ${count}`,
+        `Invoice missing bottles: ${invoiceTotals(i).missing} → ${invoiceTotals({ ...i, lines }).missing}`,
+      ] }],
+    };
+  });
+}
+
+export function recordPayment(id: string, amount: number) {
+  updateInvoice(id, (i) => ({
+    ...i,
+    payments: [...i.payments, { id: uid(), amount, date: now() }],
+    history: [...(i.history ?? []), paymentEntry(i, amount)],
+  }));
+}
