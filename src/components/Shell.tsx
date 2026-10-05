@@ -38,7 +38,7 @@ export const btn = "rounded-md bg-primary px-4 py-2 font-semibold text-primary-f
 export const btnGhost = "rounded-md border px-3 py-2 font-semibold active:scale-95 transition";
 export const card = "rounded-lg border bg-card p-4";
 
-export function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: "warn" | "good" }) {
+export function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: "warn" | "good" | undefined }) {
   return (
     <div className="rounded-md bg-muted px-3 py-2">
       <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
