@@ -12,6 +12,7 @@ export type Line = {
   missing: number;
 };
 export type Payment = { id: string; amount: number; date: string };
+export type HistoryEntry = { id: string; date: string; action: string; details: string[] };
 export type Invoice = {
   id: string;
   number: number;
@@ -19,6 +20,7 @@ export type Invoice = {
   date: string;
   lines: Line[];
   payments: Payment[];
+  history?: HistoryEntry[];
 };
 type State = { products: Product[]; customers: Customer[]; invoices: Invoice[] };
 
@@ -103,4 +105,72 @@ export function customerTotals(s: State, customerId: string) {
 
 export function updateInvoice(id: string, fn: (i: Invoice) => Invoice) {
   setState((s) => ({ ...s, invoices: s.invoices.map((i) => (i.id === id ? fn(i) : i)) }));
+}
+
+const fmtQty = (n: number) => String(n);
+
+/** Compare saved lines with edited lines and produce history entries (one per kind of change). */
+export function diffLines(inv: Invoice, next: Line[]): HistoryEntry[] {
+  const date = new Date().toISOString();
+  const before = invoiceTotals(inv);
+  const after = invoiceTotals({ ...inv, lines: next });
+  const entry = (action: string, details: string[]): HistoryEntry => ({ id: uid(), date, action, details });
+
+  if (!inv.history || inv.history.length === 0) {
+    return [
+      entry("Invoice created", [
+        ...next.map((l) => `${l.name}: ${crates(l.qty)} × ${naira(l.price)} = ${naira(l.qty * l.price)}`),
+        ...next.filter((l) => l.returned !== null).map((l) => `${l.name} crates returned: ${lineReturned(l)}`),
+        ...next.filter((l) => l.missing > 0).map((l) => `${l.name} missing bottles: ${l.missing}`),
+        `Total: ${naira(after.total)}`,
+        `Outstanding crates: ${after.outstanding}`,
+      ]),
+    ];
+  }
+
+  const details: string[] = [];
+  const returns: string[] = [];
+  const missing: string[] = [];
+  const oldMap = new Map(inv.lines.map((l) => [l.id, l]));
+  const newMap = new Map(next.map((l) => [l.id, l]));
+  for (const l of next) {
+    const o = oldMap.get(l.id);
+    if (!o) { details.push(`Product added: ${l.name}, ${crates(l.qty)} × ${naira(l.price)}`); continue; }
+    if (o.qty !== l.qty) details.push(`${l.name} quantity: ${fmtQty(o.qty)} → ${fmtQty(l.qty)} crates`);
+    if (o.price !== l.price) details.push(`${l.name} price: ${naira(o.price)} → ${naira(l.price)}`);
+    const ro = lineReturned(o), rn = lineReturned(l);
+    if (ro !== rn) {
+      const d = rn - ro;
+      returns.push(d > 0 ? `${l.name} crates returned: ${d}` : `${l.name} returns reduced by ${-d}`);
+      returns.push(`${l.name} returned total: ${ro} → ${rn}`);
+    }
+    if (o.missing !== l.missing) missing.push(`${l.name} missing bottles: ${o.missing} → ${l.missing}`);
+  }
+  for (const o of inv.lines) if (!newMap.has(o.id)) details.push(`Product removed: ${o.name}, ${crates(o.qty)}`);
+
+  const out: HistoryEntry[] = [];
+  if (details.length) {
+    if (before.total !== after.total) details.push(`Total: ${naira(before.total)} → ${naira(after.total)}`, `Balance: ${naira(before.balance)} → ${naira(after.balance)}`);
+    out.push(entry("Invoice details changed", details));
+  }
+  if (returns.length) out.push(entry("Crate return", [...returns, `Outstanding crates: ${before.outstanding} → ${after.outstanding}`]));
+  if (missing.length) out.push(entry("Missing bottles", [...missing, `Total missing bottles: ${before.missing} → ${after.missing}`]));
+  if (!details.length && before.outstanding !== after.outstanding && !returns.length)
+    out.push(entry("Crates adjusted", [`Outstanding crates: ${before.outstanding} → ${after.outstanding}`]));
+  return out;
+}
+
+export function paymentEntry(inv: Invoice, amount: number, removed = false): HistoryEntry {
+  const t = invoiceTotals(inv);
+  const nb = removed ? t.balance + amount : t.balance - amount;
+  return {
+    id: uid(),
+    date: new Date().toISOString(),
+    action: removed ? "Payment removed" : "Payment",
+    details: [
+      `${removed ? "Payment removed" : "Payment received"}: ${naira(amount)}`,
+      `Previous balance: ${naira(t.balance)}`,
+      `New balance: ${naira(nb)}`,
+    ],
+  };
 }
