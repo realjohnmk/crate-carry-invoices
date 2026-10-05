@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { Shell, Stat, btn, btnGhost, card, inputCls } from "@/components/Shell";
 import {
-  crates, invoiceTotals, isHalfStep, lineOutstanding, lineReturned, naira, setState, uid, updateInvoice, useStore, type Line,
+  crates, diffLines, invoiceTotals, paymentEntry, isHalfStep, lineOutstanding, lineReturned, naira, setState, uid, updateInvoice, useStore, type Line,
 } from "@/lib/store";
 
 export const Route = createFileRoute("/invoice/$id")({
@@ -26,12 +26,23 @@ function InvoicePage() {
   const [qty, setQty] = useState("1");
   const [pay, setPay] = useState("");
   const [err, setErr] = useState("");
+  const [draft, setDraft] = useState<Line[] | null>(null);
 
   if (!inv) return <Shell title="Invoice"><p className="text-muted-foreground">Not found (it may still be loading).</p></Shell>;
   const cust = s.customers.find((c) => c.id === inv.customerId);
-  const t = invoiceTotals(inv);
-  const setLine = (lid: string, patch: Partial<Line>) =>
-    updateInvoice(id, (i) => ({ ...i, lines: i.lines.map((l) => (l.id === lid ? { ...l, ...patch } : l)) }));
+  const lines = draft ?? inv.lines;
+  const isNew = !inv.history || inv.history.length === 0;
+  const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(inv.lines);
+  const t = invoiceTotals({ ...inv, lines });
+  const edit = (fn: (ls: Line[]) => Line[]) => setDraft(fn(draft ?? inv.lines));
+  const setLine = (lid: string, patch: Partial<Line>) => edit((ls) => ls.map((l) => (l.id === lid ? { ...l, ...patch } : l)));
+  const save = () => {
+    if (lines.length === 0) return setErr("Add at least one product");
+    const entries = diffLines(inv, lines);
+    updateInvoice(id, (i) => ({ ...i, lines, history: [...(i.history ?? []), ...entries] }));
+    setDraft(null);
+    setErr("");
+  };
 
   const addLine = () => {
     const p = s.products.find((x) => x.id === (pid || s.products[0]?.id));
@@ -39,17 +50,19 @@ function InvoicePage() {
     if (!p) return setErr("Add a product first");
     if (!isHalfStep(q)) return setErr("Use whole or half crates (1, 1.5, 2…)");
     setErr("");
-    updateInvoice(id, (i) => ({
-      ...i,
-      lines: [...i.lines, { id: uid(), productId: p.id, name: p.name, price: p.price, qty: q, returned: null, missing: 0 }],
-    }));
+    edit((ls) => [...ls, { id: uid(), productId: p.id, name: p.name, price: p.price, qty: q, returned: null, missing: 0 }]);
     setQty("1");
   };
 
   const addPayment = () => {
     const a = parseFloat(pay);
     if (!(a > 0)) return;
-    updateInvoice(id, (i) => ({ ...i, payments: [...i.payments, { id: uid(), amount: a, date: new Date().toISOString() }] }));
+    if (dirty || isNew) return setErr("Save the invoice changes before adding a payment");
+    updateInvoice(id, (i) => ({
+      ...i,
+      payments: [...i.payments, { id: uid(), amount: a, date: new Date().toISOString() }],
+      history: [...(i.history ?? []), paymentEntry(i, a)],
+    }));
     setPay("");
   };
 
@@ -99,7 +112,7 @@ function InvoicePage() {
         <button className={btn + " w-full"} onClick={addLine}>Add to invoice</button>
       </div>
 
-      {inv.lines.map((l) => (
+      {lines.map((l) => (
         <div key={l.id} className={card + " space-y-3"}>
           <div className="flex items-start justify-between">
             <div>
@@ -108,13 +121,18 @@ function InvoicePage() {
             </div>
             <div className="text-right">
               <div className="font-mono font-bold">{naira(l.qty * l.price)}</div>
-              <button className="text-xs text-destructive" onClick={() => updateInvoice(id, (i) => ({ ...i, lines: i.lines.filter((x) => x.id !== l.id) }))}>Remove</button>
+              <button className="text-xs text-destructive" onClick={() => edit((ls) => ls.filter((x) => x.id !== l.id))}>Remove</button>
             </div>
           </div>
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Price/crate ₦</span>
+            <input className={inputCls + " w-32"} type="number" min="0" key={"p" + l.price} defaultValue={l.price}
+              onBlur={(e) => { const v = parseFloat(e.target.value); if (v >= 0) setLine(l.id, { price: v }); else e.target.value = String(l.price); }} />
+          </label>
           <div className="grid grid-cols-3 gap-2 text-sm">
             <label className="space-y-1">
               <span className="text-muted-foreground">Quantity</span>
-              <input className={inputCls} type="number" step="0.5" min="0.5" defaultValue={l.qty}
+              <input className={inputCls} type="number" step="0.5" min="0.5" key={"q" + l.qty} defaultValue={l.qty}
                 onBlur={(e) => { const q = parseFloat(e.target.value); if (isHalfStep(q)) setLine(l.id, { qty: q }); else e.target.value = String(l.qty); }} />
             </label>
             <label className="space-y-1">
@@ -138,14 +156,14 @@ function InvoicePage() {
         </div>
       ))}
 
-      {inv.lines.length > 0 && (
+      {lines.length > 0 && (
         <div className={card + " overflow-x-auto p-0"}>
           <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-muted text-left text-xs uppercase text-muted-foreground">
               <tr>{["Product", "Qty", "Price", "Total", "Returned", "Outstanding", "Missing"].map((h) => <th key={h} className="px-3 py-2">{h}</th>)}</tr>
             </thead>
             <tbody className="font-mono">
-              {inv.lines.map((l) => (
+              {lines.map((l) => (
                 <tr key={l.id} className="border-t">
                   <td className="px-3 py-2 font-sans font-semibold">{l.name}</td>
                   <td className="px-3 py-2">{l.qty}</td>
@@ -166,6 +184,14 @@ function InvoicePage() {
         </div>
       )}
 
+      {(dirty || (isNew && lines.length > 0)) && (
+        <div className="sticky bottom-16 z-10 flex gap-2 rounded-lg border-2 border-primary bg-card p-3 shadow-lg">
+          <div className="flex-1 text-sm font-semibold">{isNew ? "New invoice not saved yet" : "Unsaved changes"}</div>
+          {!isNew && <button className={btnGhost} onClick={() => setDraft(null)}>Discard</button>}
+          <button className={btn} onClick={save}>{isNew ? "Create invoice" : "Save changes"}</button>
+        </div>
+      )}
+
       <div className={card + " space-y-2"}>
         <div className="font-semibold">Payments</div>
         {inv.payments.map((p) => (
@@ -173,7 +199,7 @@ function InvoicePage() {
             <span className="text-muted-foreground">{new Date(p.date).toLocaleString()}</span>
             <span className="flex items-center gap-3">
               <b className="font-mono">{naira(p.amount)}</b>
-              <button className="text-xs text-destructive" onClick={() => updateInvoice(id, (i) => ({ ...i, payments: i.payments.filter((x) => x.id !== p.id) }))}>✕</button>
+              <button className="text-xs text-destructive" onClick={() => confirm(`Remove payment of ${naira(p.amount)}?`) && updateInvoice(id, (i) => ({ ...i, payments: i.payments.filter((x) => x.id !== p.id), history: [...(i.history ?? []), paymentEntry(i, p.amount, true)] }))}>✕</button>
             </span>
           </div>
         ))}
@@ -182,6 +208,25 @@ function InvoicePage() {
           <button className={btnGhost} onClick={addPayment}>Add</button>
         </div>
         {t.balance > 0 && <button className="text-sm text-primary underline" onClick={() => setPay(String(t.balance))}>Pay full balance</button>}
+      </div>
+
+      <div className={card + " space-y-3"}>
+        <div className="font-semibold">History</div>
+        {(inv.history ?? []).length === 0 && <p className="text-sm text-muted-foreground">Nothing recorded yet. Save the invoice to start its history.</p>}
+        <ol className="space-y-3 border-l-2 border-border pl-4">
+          {[...(inv.history ?? [])].reverse().map((h) => (
+            <li key={h.id} className="relative">
+              <span className="absolute -left-[1.4rem] top-1.5 h-2.5 w-2.5 rounded-full bg-primary" />
+              <div className="text-xs text-muted-foreground">
+                {new Date(h.date).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}
+              </div>
+              <div className="font-semibold">{h.action}</div>
+              <ul className="list-disc pl-5 text-sm">
+                {h.details.map((d, k) => <li key={k}>{d}</li>)}
+              </ul>
+            </li>
+          ))}
+        </ol>
       </div>
     </Shell>
   );
