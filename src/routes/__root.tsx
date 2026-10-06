@@ -100,10 +100,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   errorComponent: ErrorComponent,
 });
 
+const themeScript = `(function(){try{var d=true;if(window.matchMedia){d=window.matchMedia("(prefers-color-scheme: dark)").matches||!window.matchMedia("(prefers-color-scheme: light)").matches;}document.documentElement.classList.toggle("dark",d);if(window.matchMedia){window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(e){document.documentElement.classList.toggle("dark",e.matches);});}}catch(e){document.documentElement.classList.add("dark");}})();`;
+
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className="dark">
       <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <HeadContent />
       </head>
       <body>
