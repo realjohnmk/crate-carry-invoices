@@ -26,6 +26,7 @@ function CustomerPage() {
       <div className="grid grid-cols-2 gap-2">
         <Stat label="Amount owed" value={naira(t.balance)} tone={t.balance > 0 ? "warn" : "good"} />
         <Stat label="Total payments" value={naira(t.paid)} tone="good" />
+        {t.credit > 0 && <Stat label="We owe them (change)" value={naira(t.credit)} tone="warn" />}
         <Stat label="Crates outstanding" value={t.outstanding} tone={t.outstanding > 0 ? "warn" : undefined} />
         <Stat label="Missing bottles" value={t.missing} tone={t.missing > 0 ? "warn" : undefined} />
       </div>
@@ -40,7 +41,7 @@ function CustomerPage() {
               <span className="font-mono">{naira(it.total)}</span>
             </div>
             <div className="mt-1 text-sm text-muted-foreground">
-              Paid {naira(it.paid)} · Balance {naira(it.balance)} · {it.outstanding} crates out · {it.missing} missing
+              Paid {naira(it.paid)} · {it.balance < 0 ? `We owe ${naira(-it.balance)}` : `Balance ${naira(it.balance)}`} · {it.outstanding} crates out · {it.missing} missing
             </div>
           </Link>
         );

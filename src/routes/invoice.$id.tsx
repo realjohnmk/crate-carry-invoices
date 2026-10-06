@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Shell, Stat, btn, btnGhost, card, inputCls } from "@/components/Shell";
 import {
   confirmInvoice, crates, invoiceTotals, isHalfStep, isLocked, lineOutstanding, lineReturned, naira,
-  recordBottles, recordPayment, recordReturn, setState, uid, updateInvoice, useStore, type Invoice, type Line,
+  recordBottles, recordChangeGiven, deleteInvoice, recordPayment, recordReturn, uid, updateInvoice, useStore, type Invoice, type Line,
 } from "@/lib/store";
 
 export const Route = createFileRoute("/invoice/$id")({
@@ -32,15 +32,17 @@ function InvoicePage() {
     <Shell
       title={`Invoice #${inv.number}`}
       action={
-        !locked ? (
-          <button className="text-sm text-destructive" onClick={() => {
-            if (!confirm("Discard this draft invoice?")) return;
-            setState((st) => ({ ...st, invoices: st.invoices.filter((i) => i.id !== id) }));
+        <div className="flex items-center gap-3">
+          {locked && <span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold">🔒 Locked</span>}
+          <button className="text-sm font-semibold text-destructive" onClick={() => {
+            const msg = locked
+              ? `Delete invoice #${inv.number} for ${cust?.name ?? "this customer"}? Its sale, payments and history will be removed permanently.`
+              : "Discard this draft invoice?";
+            if (!confirm(msg)) return;
+            deleteInvoice(id);
             nav({ to: "/" });
-          }}>Discard draft</button>
-        ) : (
-          <span className="rounded-full bg-muted px-3 py-1 text-xs font-semibold">🔒 Locked</span>
-        )
+          }}>{locked ? "Delete" : "Discard draft"}</button>
+        </div>
       }
     >
       <div className="flex justify-between text-sm">
@@ -51,7 +53,9 @@ function InvoicePage() {
       <div className="grid grid-cols-3 gap-2">
         <Stat label="Total" value={naira(t.total)} />
         <Stat label="Paid" value={naira(t.paid)} tone="good" />
-        <Stat label="Balance" value={naira(t.balance)} tone={t.balance > 0 ? "warn" : "good"} />
+        {t.balance < 0
+          ? <Stat label="We owe them" value={naira(-t.balance)} tone="warn" />
+          : <Stat label="Balance" value={naira(t.balance)} tone={t.balance > 0 ? "warn" : "good"} />}
         <Stat label="Sold" value={t.sold} />
         <Stat label="Returned" value={t.returned} />
         <Stat label="Crates out" value={t.outstanding} tone={t.outstanding > 0 ? "warn" : undefined} />
@@ -105,7 +109,8 @@ function SaleTable({ inv }: { inv: Invoice }) {
         <tfoot className="border-t font-mono font-bold">
           <tr><td className="px-3 py-2 font-sans" colSpan={3}>Invoice Total</td><td className="px-3 py-2" colSpan={4}>{naira(t.total)}</td></tr>
           <tr><td className="px-3 py-2 font-sans" colSpan={3}>Amount Paid</td><td className="px-3 py-2" colSpan={4}>{naira(t.paid)}</td></tr>
-          <tr><td className="px-3 py-2 font-sans" colSpan={3}>Balance</td><td className="px-3 py-2 text-destructive" colSpan={4}>{naira(t.balance)}</td></tr>
+          <tr><td className="px-3 py-2 font-sans" colSpan={3}>Balance</td><td className="px-3 py-2 text-destructive" colSpan={4}>{naira(Math.max(0, t.balance))}</td></tr>
+          {t.balance < 0 && <tr><td className="px-3 py-2 font-sans" colSpan={3}>Owed to customer (change)</td><td className="px-3 py-2 text-destructive" colSpan={4}>{naira(-t.balance)}</td></tr>}
         </tfoot>
       </table>
     </div>
@@ -214,7 +219,7 @@ function LockedView({ inv }: { inv: Invoice }) {
   const addPayment = () => {
     const a = parseFloat(pay);
     if (!(a > 0)) return setErr("Enter an amount");
-    if (a > t.balance) return setErr(`Amount is more than the balance (${naira(t.balance)})`);
+    if (a > t.balance && !confirm(`${naira(a)} is more than the balance. Record ${naira(a - t.balance)} as owed to the customer?`)) return;
     setErr(""); recordPayment(inv.id, a); setPay("");
   };
 
@@ -224,14 +229,15 @@ function LockedView({ inv }: { inv: Invoice }) {
       <div className={card + " space-y-2"}>
         <div className="flex items-center justify-between">
           <div className="font-semibold">Payment</div>
-          {t.balance <= 0 && <span className="rounded-full bg-primary px-3 py-1 text-sm font-bold text-primary-foreground">✓ Paid</span>}
+          {t.balance === 0 && <span className="rounded-full bg-primary px-3 py-1 text-sm font-bold text-primary-foreground">✓ Paid</span>}
         </div>
         {inv.payments.map((p) => (
           <div key={p.id} className="flex justify-between text-sm">
             <span className="text-muted-foreground">{new Date(p.date).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}</span>
-            <b className="font-mono">{naira(p.amount)}</b>
+            <b className="font-mono">{p.amount < 0 ? `Change given ${naira(-p.amount)}` : naira(p.amount)}</b>
           </div>
         ))}
+        {t.balance < 0 && <ChangeOwed invId={inv.id} owed={-t.balance} />}
         {t.balance > 0 && (
           <>
             <div className="flex gap-2">
@@ -307,6 +313,24 @@ function BottleRow({ invId, line }: { invId: string; line: Line }) {
           <input className={inputCls} type="number" min="0" step="1" value={v} onChange={(e) => setV(e.target.value)} aria-label="Missing bottles now" />
           <button className={btn} onClick={() => { const c = parseInt(v); if (c >= 0) recordBottles(invId, line.id, c); setOpen(false); }}>Save</button>
           <button className={btnGhost} onClick={() => setOpen(false)}>✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChangeOwed({ invId, owed }: { invId: string; owed: number }) {
+  const [v, setV] = useState("");
+  return (
+    <div className="space-y-2 rounded-md border-2 border-destructive p-3">
+      <div className="text-sm font-semibold text-destructive">Overpaid — we owe the customer {naira(owed)} change</div>
+      <button className={btn + " w-full"} onClick={() => confirm(`Record ${naira(owed)} change given back?`) && recordChangeGiven(invId, owed)}>
+        Settle {naira(owed)} change
+      </button>
+      {owed > 1 && (
+        <div className="flex gap-2">
+          <input className={inputCls} type="number" min="1" placeholder="Part amount ₦" value={v} onChange={(e) => setV(e.target.value)} />
+          <button className={btnGhost + " whitespace-nowrap"} onClick={() => { const a = parseFloat(v); if (a > 0) { recordChangeGiven(invId, a); setV(""); } }}>Give part</button>
         </div>
       )}
     </div>
