@@ -91,12 +91,13 @@ export function invoiceTotals(inv: Invoice) {
 
 export function customerTotals(s: State, customerId: string) {
   const invs = s.invoices.filter((i) => i.customerId === customerId);
-  const acc = { total: 0, paid: 0, balance: 0, outstanding: 0, missing: 0 };
+  const acc = { total: 0, paid: 0, balance: 0, credit: 0, outstanding: 0, missing: 0 };
   for (const i of invs) {
     const t = invoiceTotals(i);
     acc.total += t.total;
     acc.paid += t.paid;
-    acc.balance += t.balance;
+    acc.balance += Math.max(0, t.balance);
+    acc.credit += Math.max(0, -t.balance);
     acc.outstanding += t.outstanding;
     acc.missing += t.missing;
   }
@@ -163,6 +164,7 @@ export function diffLines(inv: Invoice, next: Line[]): HistoryEntry[] {
 export function paymentEntry(inv: Invoice, amount: number, removed = false): HistoryEntry {
   const t = invoiceTotals(inv);
   const nb = removed ? t.balance + amount : t.balance - amount;
+  const extra = !removed && nb < 0 ? [`Overpaid — we owe customer: ${naira(-nb)}`] : [];
   return {
     id: uid(),
     date: new Date().toISOString(),
@@ -170,7 +172,8 @@ export function paymentEntry(inv: Invoice, amount: number, removed = false): His
     details: [
       `${removed ? "Payment removed" : "Payment received"}: ${naira(amount)}`,
       `Previous balance: ${naira(t.balance)}`,
-      `New balance: ${naira(nb)}`,
+      `New balance: ${nb < 0 ? "₦0" : naira(nb)}`,
+      ...extra,
     ],
   };
 }
@@ -232,4 +235,25 @@ export function recordPayment(id: string, amount: number) {
     payments: [...i.payments, { id: uid(), amount, date: now() }],
     history: [...(i.history ?? []), paymentEntry(i, amount)],
   }));
+}
+
+/** Settle money we owe the customer (change given back). Stored as a negative payment. */
+export function recordChangeGiven(id: string, amount: number) {
+  updateInvoice(id, (i) => {
+    const owed = -invoiceTotals(i).balance;
+    if (owed <= 0 || amount <= 0) return i;
+    const a = Math.min(amount, owed);
+    return {
+      ...i,
+      payments: [...i.payments, { id: uid(), amount: -a, date: now() }],
+      history: [...(i.history ?? []), { id: uid(), date: now(), action: "Change given to customer", details: [
+        `Change given: ${naira(a)}`,
+        `Owed to customer: ${naira(owed)} → ${naira(owed - a)}`,
+      ] }],
+    };
+  });
+}
+
+export function deleteInvoice(id: string) {
+  setState((s) => ({ ...s, invoices: s.invoices.filter((i) => i.id !== id) }));
 }

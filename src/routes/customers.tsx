@@ -41,6 +41,7 @@ function Customers() {
               <span className={`font-mono ${t.balance > 0 ? "text-destructive" : "text-primary"}`}>{naira(t.balance)}</span>
             </div>
             <div className="mt-1 text-sm text-muted-foreground">
+              {t.credit > 0 && <span className="font-semibold text-destructive">We owe {naira(t.credit)} · </span>}
               {t.outstanding} crates out · {t.missing} missing bottles · {t.invoices.length} invoices
             </div>
           </Link>

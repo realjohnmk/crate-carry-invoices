@@ -70,8 +70,8 @@ function Index() {
             </div>
             <div className="mt-1 flex justify-between text-sm text-muted-foreground">
               <span>{new Date(inv.date).toLocaleDateString()} · {t.outstanding} crates out</span>
-              <span className={t.balance > 0 ? "font-semibold text-destructive" : "text-primary"}>
-                {t.balance > 0 ? `Owes ${naira(t.balance)}` : "Paid"}
+              <span className={t.balance !== 0 ? "font-semibold text-destructive" : "text-primary"}>
+                {t.balance > 0 ? `Owes ${naira(t.balance)}` : t.balance < 0 ? `We owe ${naira(-t.balance)}` : "Paid"}
               </span>
             </div>
           </Link>
